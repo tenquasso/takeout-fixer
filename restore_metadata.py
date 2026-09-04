@@ -83,9 +83,19 @@ def find_json_match(filename, json_map):
                 f'{c_stem}.supplemental-metadata({num}).json',
                 f'{clean}({num}).json',
                 f'{clean} ({num}).json',
-                f'{c_stem}({num}){c_ext}.supplemental-metadata.json',
                 f'{stem_lower}.supplemental-metadata({num}).json',
+                f'{f_lower}.supplemental-metadata({num}).json',
             ])
+            
+    if '-edited' in f_lower:
+        unedited = f_lower.replace('-edited', '')
+        u_stem, _ = os.path.splitext(unedited)
+        cands.extend([
+            unedited + '.supplemental-metadata.json',
+            unedited + '.json',
+            u_stem + '.supplemental-metadata.json',
+            u_stem + '.json',
+        ])
             
     for c in cands:
         if c.lower() in json_map:
@@ -121,6 +131,9 @@ def parse_json(item):
 
 def run(target_dir, batch_size=1000):
     exiftool = get_exiftool()
+    offset_str = datetime.now().astimezone().strftime('%z')
+    tz_offset = f"{offset_str[:3]}:{offset_str[3:]}" if len(offset_str) == 5 else "+00:00"
+    
     pairs = []
     for root, dirs, files in os.walk(target_dir):
         json_map = {f.lower(): f for f in files if f.lower().endswith('.json')}
@@ -142,9 +155,19 @@ def run(target_dir, batch_size=1000):
             is_vid = os.path.splitext(media)[1].lower() in VIDEO_EXTS
             lines.extend(["-overwrite_original", "-charset", "filename=utf8", "-charset", "utf8"])
             if is_vid:
-                lines.extend(["-api", "QuickTimeUTC=1", f"-QuickTime:CreateDate={d_str}", f"-QuickTime:ModifyDate={d_str}", f"-Keys:CreationDate={d_str}"])
+                lines.extend([
+                    "-api", "QuickTimeUTC=1",
+                    f"-QuickTime:CreateDate={d_str}",
+                    f"-QuickTime:ModifyDate={d_str}",
+                    f"-Keys:CreationDate={d_str}{tz_offset}"
+                ])
             else:
-                lines.extend([f"-AllDates={d_str}"])
+                lines.extend([
+                    f"-AllDates={d_str}",
+                    f"-OffsetTime={tz_offset}",
+                    f"-OffsetTimeOriginal={tz_offset}",
+                    f"-OffsetTimeDigitized={tz_offset}"
+                ])
             lines.extend([media, "-execute"])
             
         with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False, suffix='.txt') as tmp:
