@@ -1,0 +1,23 @@
+# ignore takeout media and json
+Photos from */
+Trash/
+Failed Videos/
+_JSON_BACKUP/
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.heif
+*.webp
+*.gif
+*.mp4
+*.mov
+*.mkv
+*.svg
+*.json
+*.tmp
+*.mp
+*.ico
+__pycache__/
+.vscode/
+.idea/
