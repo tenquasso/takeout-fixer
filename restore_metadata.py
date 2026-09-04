@@ -2,13 +2,35 @@ import os
 import sys
 import json
 import re
+import time
+import shutil
 import ctypes
+import tempfile
 import subprocess
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 
+MEDIA_EXTS = {
+    '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp',
+    '.gif', '.mp4', '.mov', '.mkv', '.svg', '.mp', '.m4v'
+}
+
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.m4v'}
-MEDIA_EXTS = {'.jpg', '.jpeg', '.png', '.heic', '.webp', '.gif', '.mp4', '.mov', '.mkv'}
+
+def get_exiftool():
+    p = shutil.which("exiftool")
+    if p:
+        return p
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    candidates = [
+        os.path.join(local_app, r"Programs\ExifTool\ExifTool.exe"),
+        r"C:\Program Files\ExifTool\exiftool.exe",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return "exiftool"
 
 def set_file_times(filepath, timestamp):
     try:
@@ -61,8 +83,8 @@ def find_json_match(filename, json_map):
                 f'{c_stem}.supplemental-metadata({num}).json',
                 f'{clean}({num}).json',
                 f'{clean} ({num}).json',
+                f'{c_stem}({num}){c_ext}.supplemental-metadata.json',
                 f'{stem_lower}.supplemental-metadata({num}).json',
-                f'{f_lower}.supplemental-metadata({num}).json',
             ])
             
     for c in cands:
@@ -75,44 +97,70 @@ def find_json_match(filename, json_map):
             
     return None
 
-def parse_json(json_path):
+def parse_json(item):
+    media_path, json_path = item
     try:
-        with open(json_path, 'r', encoding='utf-8') as f:
+        with open(json_path, 'r', encoding='utf-8', errors='replace') as f:
             data = json.load(f)
         ts = int(data.get('photoTakenTime', {}).get('timestamp', 0))
         geo = data.get('geoData', {})
         lat = geo.get('latitude', 0.0)
         lng = geo.get('longitude', 0.0)
         alt = geo.get('altitude', 0.0)
-        return {'ts': ts, 'lat': lat, 'lng': lng, 'alt': alt, 'desc': data.get('description', '')}
+        return {
+            'media_path': media_path,
+            'timestamp': ts,
+            'has_gps': (lat != 0.0 or lng != 0.0),
+            'latitude': lat,
+            'longitude': lng,
+            'altitude': alt,
+            'description': data.get('description', '').strip()
+        }
     except Exception:
         return None
 
-def run(target_dir):
+def run(target_dir, batch_size=1000):
+    exiftool = get_exiftool()
+    pairs = []
     for root, dirs, files in os.walk(target_dir):
         json_map = {f.lower(): f for f in files if f.lower().endswith('.json')}
         for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in MEDIA_EXTS:
+            if os.path.splitext(f)[1].lower() in MEDIA_EXTS:
                 matched = find_json_match(f, json_map)
                 if matched:
-                    info = parse_json(os.path.join(root, matched))
-                    if info and info['ts']:
-                        dt = datetime.fromtimestamp(info['ts']).strftime('%Y:%m:%d %H:%M:%S')
-                        file_path = os.path.join(root, f)
-                        if ext in VIDEO_EXTS:
-                            cmd = [
-                                'exiftool', '-overwrite_original',
-                                '-api', 'QuickTimeUTC=1',
-                                f'-QuickTime:CreateDate={dt}',
-                                f'-QuickTime:ModifyDate={dt}',
-                                f'-Keys:CreationDate={dt}',
-                                file_path
-                            ]
-                        else:
-                            cmd = ['exiftool', '-overwrite_original', f'-AllDates={dt}', file_path]
-                        subprocess.run(cmd)
-                        set_file_times(file_path, info['ts'])
+                    pairs.append((os.path.join(root, f), os.path.join(root, matched)))
+                    
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        parsed = [p for p in pool.map(parse_json, pairs) if p and p['timestamp']]
+        
+    batches = [parsed[i:i + batch_size] for i in range(0, len(parsed), batch_size)]
+    for idx, batch in enumerate(batches, 1):
+        lines = []
+        for item in batch:
+            media = item['media_path']
+            d_str = datetime.fromtimestamp(item['timestamp']).strftime('%Y:%m:%d %H:%M:%S')
+            is_vid = os.path.splitext(media)[1].lower() in VIDEO_EXTS
+            lines.extend(["-overwrite_original", "-charset", "filename=utf8", "-charset", "utf8"])
+            if is_vid:
+                lines.extend(["-api", "QuickTimeUTC=1", f"-QuickTime:CreateDate={d_str}", f"-QuickTime:ModifyDate={d_str}", f"-Keys:CreationDate={d_str}"])
+            else:
+                lines.extend([f"-AllDates={d_str}"])
+            lines.extend([media, "-execute"])
+            
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', delete=False, suffix='.txt') as tmp:
+            for l in lines:
+                tmp.write(l + "\n")
+            tmp_name = tmp.name
+        try:
+            subprocess.run([exiftool, "-@", tmp_name], capture_output=True, text=True)
+        finally:
+            try:
+                os.remove(tmp_name)
+            except Exception:
+                pass
+        for item in batch:
+            set_file_times(item['media_path'], item['timestamp'])
+        print(f"batch {idx}/{len(batches)} done")
 
 if __name__ == '__main__':
     run(sys.argv[1] if len(sys.argv) > 1 else '.')
