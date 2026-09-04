@@ -36,34 +36,56 @@ def set_file_times(filepath, timestamp):
 def find_json_match(filename, json_map):
     f_lower = filename.lower()
     stem, ext = os.path.splitext(filename)
+    stem_lower = stem.lower()
     
     cands = [
         f_lower + '.supplemental-metadata.json',
         f_lower + '.json',
-        stem.lower() + '.supplemental-metadata.json',
+        stem_lower + '.supplemental-metadata.json',
+        stem_lower + '.json',
     ]
     
-    if '(' in filename:
+    if '(' in filename and ')' in filename:
         m = re.search(r'\((\d+)\)', filename)
         if m:
-            num = m.group(0)
-            cands.append(f'{stem}.supplemental-metadata({num}).json')
+            num = m.group(1)
+            clean = re.sub(r'\s*\(\d+\)', '', filename).lower()
+            c_stem, c_ext = os.path.splitext(clean)
+            cands.extend([
+                f'{clean}.supplemental-metadata({num}).json',
+                f'{clean}.supplemental-metadata ({num}).json',
+                f'{c_stem}{c_ext}.supplemental-metadata({num}).json',
+                f'{c_stem}.supplemental-metadata({num}).json',
+                f'{clean}({num}).json',
+                f'{clean} ({num}).json',
+                f'{stem_lower}.supplemental-metadata({num}).json',
+                f'{f_lower}.supplemental-metadata({num}).json',
+            ])
             
     for c in cands:
         if c.lower() in json_map:
             return json_map[c.lower()]
+            
+    # handle truncated names from takeout (around 45-50 chars)
+    for j_lower, j_orig in json_map.items():
+        if j_lower.startswith(stem_lower[:45]) and ('metadata' in j_lower or 'json' in j_lower):
+            return j_orig
+            
     return None
 
 def parse_json(json_path):
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    return int(data.get('photoTakenTime', {}).get('timestamp', 0))
+    ts = None
+    if 'photoTakenTime' in data and 'timestamp' in data['photoTakenTime']:
+        ts = int(data['photoTakenTime']['timestamp'])
+    return ts
 
 def run(target_dir):
     for root, dirs, files in os.walk(target_dir):
         json_map = {f.lower(): f for f in files if f.lower().endswith('.json')}
         for f in files:
-            if f.lower().endswith(('.jpg', '.jpeg', '.png')):
+            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.heic', '.webp')):
                 matched = find_json_match(f, json_map)
                 if matched:
                     ts = parse_json(os.path.join(root, matched))
