@@ -21,6 +21,21 @@ on windows via winget:
 winget install OliverBetz.ExifTool
 ```
 
+### where to put the script & folder setup
+you can use it in two ways:
+
+1. **keep the script in your project/tools repo** and just pass the path to your extracted takeout folder:
+```bash
+python restore_metadata.py "D:/Takeout/Google Photos"
+```
+
+2. **or drop `restore_metadata.py` directly inside** your takeout `Google Photos` folder and run it without any path:
+```bash
+python restore_metadata.py
+```
+
+the script scans recursively, so all subfolders (`Photos from 2021`, `Photos from 2022`, albums, etc.) are processed automatically. just make sure the `.json` sidecars are in the same folder as their corresponding media files (which is how google takeout extracts them by default).
+
 ### usage
 
 test first without modifying anything:
